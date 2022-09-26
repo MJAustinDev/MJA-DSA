@@ -31,9 +31,29 @@ SOFTWARE.
 #include "MJA_HashTable.h"
 
 
+inline int defaultHash(unsigned int key){
+    return (key % (unsigned int)1033);
+}
+
+//keeps all error codes for the adjacency list graph together, allows for both Vertex and Graph classes to use the same codes
+class MJA_ErrorCode_GraphAdjList {
+
+protected:
+
+    //operation success indicator constants
+    const int SUCCESS = 0; //operation was successful
+    const int NOT_EXIST_SCR = 1; //source key doesn't exist in the graph
+    const int NOT_EXIST_DEST = 2; //destination key doesn't exist in the graph
+    const int SAME_SRC_DEST = 3; //source and destination are the same node
+    const int NOT_EXIST_EDGE = 4; //edge doesn't exist (failed attempt to remove non-existent edge)
+    const int RESET_EDGE = 5; //edge already existed (attempt to add an existing edge, just updates the edges weight)
+
+};
+
+
 //graph data structure represented via an adjacency list
 template <typename T>
-class MJA_GraphAdjList {
+class MJA_GraphAdjList : MJA_ErrorCode_GraphAdjList {
 
 private:
 
@@ -47,15 +67,10 @@ private:
         double w;
     }; //END -- STRUCT EDGE
 
-    class Vertex {
+    class Vertex : MJA_ErrorCode_GraphAdjList {
 
     friend class MJA_GraphAdjList;
     friend class MJA_HashTable<Vertex, unsigned int>;
-
-    public:
-
-        //~Vertex(){if (obj != nullptr){delete obj;}};
-        unsigned int getUniqueID(){return uniqueID;};
 
     private:
 
@@ -64,7 +79,7 @@ private:
 
         unsigned int uniqueID;
         T* obj;
-
+        int edgeCount = 0;
         MJA_LinkedList<Edge> connections; //edges from this node to other nodes
 
         //returns the linked list node where the edge between this node (u) and the other node (v) exists
@@ -86,9 +101,10 @@ private:
             MJA_NodeLL<Edge>* ptr = getConnectionNode(v);
             if (ptr != nullptr) {
                 connections.remNode(ptr);
-                return 0; //0 indicates successful removal of edge
+                edgeCount--;
+                return SUCCESS; //indicate successful removal of edge
             }
-            return 4; //4 indicates that the edge doesn't exist
+            return NOT_EXIST_EDGE; //indicate that the edge doesn't exist
         }
         //returns edge structure from memory heap
         Edge* getConnection(Vertex* v){
@@ -98,113 +114,165 @@ private:
             }
             return nullptr; //edge doesn't exist return a nullptr
         }
+
+    public:
+        unsigned int getUniqueID(){return uniqueID;};
+        int getEdgeCount(){return edgeCount;};
+        unsigned int* getEdges(){
+            if (connections.resetCycleUp()){
+                unsigned int* output = new unsigned int[edgeCount];
+                unsigned int* ptr = output;
+                //set all values of output to the keys that this node is connected to
+                do {
+                    *(ptr++) = connections.cycle->obj->v->getUniqueID(); //set values of output via post incrementing ptr
+                } while (connections.cycleUp());
+                return output;
+            }
+            return nullptr; //no edges stored return a nullptr
+        };
+
     }; //END -- CLASS VERTEX
 
     unsigned int uniqueID = 0;
     MJA_HashTable<Vertex, unsigned int> vertices;
-    MJA_LinkedList<unsigned int> keys; //allows for iteration over whole graph
+    int tableLength;
+    int (*tableFunc)(unsigned int);
 
     int srcDestCheck(Vertex* srcPtr, Vertex* destPtr){
         if (srcPtr == nullptr){
-            return 1; //1 indicates that the source node doesn't exist
+            return NOT_EXIST_SCR; //indicate that the source node doesn't exist
         }
         if (destPtr == nullptr){
-            return 2; // 2 indicates that the destination node doesn't exist
+            return NOT_EXIST_DEST; //indicate that the destination node doesn't exist
         }
         if (srcPtr == destPtr){
-            return 3; //3 indicates that source and destination are the same
+            return SAME_SRC_DEST; //indicate that source and destination are the same
         }
-        return 0; //passes the basic check
+        return SUCCESS; //indicate that the basic check has passed
     }
 
 public:
 
-    MJA_GraphAdjList(){};
+    MJA_GraphAdjList(int tableLength, int(*tableFunc)(unsigned int)) : vertices(tableLength, tableFunc, false){this->tableLength = tableLength; this->tableFunc = tableFunc;};
+    MJA_GraphAdjList() : MJA_GraphAdjList(1033, &defaultHash){};
+    MJA_GraphAdjList(MJA_GraphAdjList<T> &oldGraph); //copy constructor
+
     ~MJA_GraphAdjList(){};
 
-    int getNodeCount(){return keys.getNodeCount();};
-    unsigned int* getKeys(){
-        if(keys.getNodeCount() == 0){
-            return nullptr;
-        }
-        unsigned int* output = new unsigned int[keys.getNodeCount()];
-        unsigned int* ptr = output;
-        if (keys.resetCycleUp()){
-            do {
-                *(ptr++) = *(keys.cycle->obj); //use post increment via ptr to set all values of output to the values of the stored keys
-            } while (keys.cycleUp());
-        }
-        return output;
-    }
+    int getNodeCount(){return vertices.getKeyCount();};
+    unsigned int* getKeys(){return vertices.getKeys();};
 
     //add a new vertex to the graph
-    void addVertex(T* obj){ vertices.add(new Vertex(obj, uniqueID), uniqueID); keys.addEnd(new unsigned int (uniqueID)); uniqueID++;};
-
-    //remove a vertex from the graph (also remove it's key store and all edges where the vertex is a destination
-    void remVertex(unsigned int key){
-        //pop vertex from hash table
-        Vertex* v = vertices.pop(key);
-        if (v != nullptr){ //if v doesn't exist inside of the graph then don't waste time processing the bellow but attempting to match with a nullptr and a key that wont exist
-            MJA_NodeLL<unsigned int>* keyPtr = nullptr;
-            //check for connections
-            if (keys.resetCycleUp()){
-                do {
-                    if (*(keys.cycle->obj) == key){
-                        keyPtr = keys.cycle; //remember the keys node position
-                    } else {
-                        vertices.get(*(keys.cycle->obj))->remEdge(v); //remove edge between u and v if it exists
-                    }
-                } while (keys.cycleUp());
-            }
-            keys.remNode(keyPtr); //safe to remove key now cycling has ended
-            delete v; //deallocate heap memory storing the vertex
-        }
-    };
-
-    //remove an vertex from the graph while preserving the stored object
-    T* popVertex(unsigned int key){
-        Vertex* v = vertices.get(key);
-        if (v != nullptr){
-            T* output = v->obj;
-            v->obj = nullptr;
-            v = nullptr;
-            remVertex(key);
-            return output;
-        }
-        return nullptr; //vertex doesn't exist so return nullptr
-    }
+    int addVertex(T* obj){vertices.add(new Vertex(obj, uniqueID), uniqueID); uniqueID++; return SUCCESS;}; //returns success as uniqueID will always be unique (except for unlikely overflow which will take over 4294967295 nodes to be added)
+    int remVertex(unsigned int key); //remove a vertex from the graph (also remove all edges where the vertex is a destination)
+    T* popVertex(unsigned int key); //remove a vertex from the graph while preserving the stored object
 
     //add a new edge to the graph (or update weight of pre-existing edge)
-    int addEdge(unsigned int src, unsigned int dest, double weight){
-        Vertex* srcPtr = vertices.get(src);
-        Vertex* destPtr = vertices.get(dest);
-        int check = srcDestCheck(srcPtr, destPtr);
-        if (check != 0){ //0 passes check
-            return check; //1 source doesn't exist, 2 destination doesn't exist, 3 source equals desination
-        }
-        Edge* edgePtr = srcPtr->getConnection(destPtr);
-        if (edgePtr != nullptr){ //edge exists already
-            edgePtr->w = weight; //update weight
-            return 4; //4 indicates that edge already exists and that the weight has been reset
-        }
-        srcPtr->addEdge(destPtr, weight); //edge doesn't exist add new edge
-        return 0; //0 indicates successful addition of new edge
-    };
-    int addEdge(unsigned int src, unsigned int dest) {return addEdge(src, dest, 1.0);};
+    int addEdge(unsigned int src, unsigned int dest, double weight);
+    int addEdge(unsigned int src, unsigned int dest) {return addEdge(src, dest, 1.0);}; //use default weight of 1.0 (i.e., unweighted graph)
 
-    //removes an edge from the graph
-    int remEdge(unsigned int src, unsigned int dest){
-        Vertex* srcPtr = vertices.get(src);
-        Vertex* destPtr = vertices.get(dest);
-        int check = srcDestCheck(srcPtr, destPtr);
-        if (check != 0){ //0 passes check
-            return check; //1 source doesn't exist, 2 destination doesn't exist, 3 source equals desination
-        }
-        return srcPtr->remEdge(destPtr); //0 for success, 4 for none existent edge
-    };
-
+    int remEdge(unsigned int src, unsigned int dest); //removes an edge from the graph
 
 };
+
+/*
+more lengthy/looping functions are defined below to prevent above main header getting spammed
+*/
+
+//copy constructor
+template <typename T>
+MJA_GraphAdjList<T> :: MJA_GraphAdjList(MJA_GraphAdjList<T> &oldGraph) : MJA_GraphAdjList(oldGraph.tableLength, &defaultHash) {
+
+    //copy over each vertex
+    unsigned int* oldKeys = oldGraph.getKeys();
+    for (int i=0; i<oldGraph.getNodeCount();i++){
+        Vertex* v = oldGraph.vertices.get(oldKeys[i]);
+        this->vertices.add(new Vertex(new T(*(v->obj)), oldKeys[i]), oldKeys[i]); //add new node to graph
+    }
+    //copy over all edges
+    for (int i=0;i<oldGraph.getNodeCount();i++){
+        Vertex* u = oldGraph.vertices.get(oldKeys[i]);
+        if (u->getEdgeCount() != 0){
+            unsigned int* edges = u->getEdges(); //should never be a nullptr as getEdgeCount would return 0 if no edges existed
+            for (int j=0;j<u->getEdgeCount();j++){
+                Vertex* v = oldGraph.vertices.get(edges[j]);
+                this->vertices.get(oldKeys[i])->addEdge(this->vertices.get(edges[j]), u->getConnection(v)->w);
+            }
+            delete[] edges;
+        }
+    }
+    delete[] oldKeys;
+    this->uniqueID = oldGraph.uniqueID;
+};
+
+//remove a vertex from the graph (also remove all edges where the vertex is a destination)
+template <typename T>
+int MJA_GraphAdjList<T> :: remVertex(unsigned int key){
+    //pop vertex from hash table
+    Vertex* v = vertices.pop(key);
+    if (v != nullptr){ //if v doesn't exist then cant deallocate it
+        //remove all incoming edges to this node
+        unsigned int* nodes = getKeys();
+        for (int i=0; i<getNodeCount();i++){
+            remEdge(nodes[i], key);
+        }
+        delete[] nodes; //deallocate heap memory storing current node keys
+        delete v; //deallocate heap memory storing the vertex
+        return SUCCESS;
+    }
+    return NOT_EXIST_SCR; //vertex did not exist anyhow
+};
+
+//remove a vertex from the graph while preserving the stored object
+template <typename T>
+T* MJA_GraphAdjList<T> :: popVertex(unsigned int key){
+    Vertex* v = vertices.get(key);
+    if (v != nullptr){
+        T* output = v->obj;
+        v->obj = nullptr; //set object pointer to null so it wont be destroyed
+        v = nullptr;
+        remVertex(key); //use remVertex function as it handles incoming edge removal
+        return output;
+    }
+    return nullptr; //vertex doesn't exist so return nullptr
+}
+
+//add a new edge to the graph (or update weight of pre-existing edge)
+template <typename T>
+int MJA_GraphAdjList<T> :: addEdge(unsigned int src, unsigned int dest, double weight){
+    Vertex* srcPtr = vertices.get(src);
+    Vertex* destPtr = vertices.get(dest);
+    int check = srcDestCheck(srcPtr, destPtr);
+    if (check != SUCCESS){ //if failed the src/dest key check
+        return check;
+    }
+    //both source and destination exist, see if an edge between them exists
+    Edge* edgePtr = srcPtr->getConnection(destPtr);
+    if (edgePtr != nullptr){ //edge exists already
+        edgePtr->w = weight; //update weight
+        return RESET_EDGE; //indicate that edge already exists and that the weight has been reset
+    }
+    srcPtr->addEdge(destPtr, weight); //edge doesn't exist add a new edge
+    srcPtr->edgeCount++;
+    return SUCCESS; //indicates successful addition of new edge
+};
+
+//removes an edge from the graph
+template <typename T>
+int MJA_GraphAdjList<T> :: remEdge(unsigned int src, unsigned int dest){
+    Vertex* srcPtr = vertices.get(src);
+    Vertex* destPtr = vertices.get(dest);
+    int check = srcDestCheck(srcPtr, destPtr);
+    if (check != SUCCESS){ //if failed the src/dest key check
+        return check;
+    }
+    return srcPtr->remEdge(destPtr); //function returns success/fail depending on if the edge exists or not
+};
+
+
+
+
+
 
 
 #endif

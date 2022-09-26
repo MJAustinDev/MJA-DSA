@@ -29,15 +29,26 @@ SOFTWARE.
 
 #include <MJA_LinkedList.h>
 
+//keeps all error codes for the hash table together, allows for derived classes to use the same codes
+class MJA_ErrorCode_HashTable {
+
+protected:
+
+    //operation success indicator constants
+    const int SUCCESS = 0;
+    const int KEY_OVERWRITTEN = 1;
+    const int NON_EXIST_KEY = 2;
+
+};
 
 //TODO -- B TREE VERSION AS WELL AS LINKED LIST VERSION
 //chained hash table data structure
 template<typename Tobj, typename Tkey>
-class MJA_HashTable {
+class MJA_HashTable : MJA_ErrorCode_HashTable {
 
 private:
 
-    //Hash Table Entry Class should only be manipulated only by the hash table or link list that stores the entries
+    //Hash Table Entry Class should only be manipulated only by the hash table or the linked list that stores the entries
     class HashTableEntry {
 
     friend class MJA_HashTable<Tobj, Tkey>;
@@ -64,7 +75,7 @@ private:
     int length; //size of table
     bool safeDestruction; //if true then stored items are not destroyed when the table is destroyed
     int (*hashFunction)(Tkey); //user set hash function
-    static int defaultHash(unsigned int key){return ((int)key)%1033;}; //default hash function if user doesn't enter one
+    int keyCount = 0;
 
     //forces a safety catch to the hash function
     int hashFunc(Tkey key){
@@ -98,8 +109,7 @@ public:
         this->table = new MJA_LinkedList<HashTableEntry>[length]; //define table
     };
     MJA_HashTable(int length, int(*hashFunction)(Tkey)) : MJA_HashTable(length, hashFunction, false) {}; //default setting is to destruct all stored items on exit
-    MJA_HashTable() : MJA_HashTable(1033, &defaultHash, false){}; // default setting when no hash function is given (1033 is large enough prime for the kinds of implementations that I'll be using)
-    MJA_HashTable(bool safeDestruction) : MJA_HashTable(1033, &defaultHash, safeDestruction) {}; //use default hash function, but can decide if to use safe destruction or not
+    MJA_HashTable(MJA_HashTable<Tobj, Tkey> & oldTable); //copy constructor
 
     ~MJA_HashTable(){
         if (safeDestruction){ //allows for hash table to be destroyed without deallocating all contents (e.g., if stored objects are used else where via ptrs)
@@ -112,55 +122,111 @@ public:
         delete[] table;
     };
 
-    //add given a new entry into the table, if item is already bound to said key then the item is overwritten
-    int add(Tobj* obj, Tkey key){
-        int flag = 0;
-        MJA_LinkedList<HashTableEntry>* index = &(table[hashFunc(key)]);
-        MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(index, key);
-        if (nodePtr != nullptr){ //item is already bound to that key, replace it destructively -- can do so non-destructively by manually poping key first
-            index->remNode(nodePtr);
-            flag = 1;
-        }
-        index->addEnd(new HashTableEntry(obj, key));
-        return flag; //0 - item added, 1 - item replaced destructively
-    };
+    int getKeyCount(){return keyCount;};
+    Tkey* getKeys(); //returns all the stored keys, clunky for really large tables when all items are stored towards the last indicies
 
-    //access a stored object given the key
-    Tobj* get(Tkey key){
-        MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(&(table[hashFunc(key)]), key);
-        if (nodePtr != nullptr){
-            return nodePtr->obj->obj; //NodeLL -> HashTableEntry -> Tobj
-        } else {
-            return nullptr; //not found return nullptr
-        }
-    };
+    Tobj* get(Tkey key); //get an object stored with a given key
 
-    //remove and deallocate an object if stored inside of the table
-    int rem(Tkey key){
-        MJA_LinkedList<HashTableEntry>* index = &(table[hashFunc(key)]);
-        MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(index, key);
-        if (nodePtr != nullptr){
-            index->remNode(nodePtr);
-            return 0; //0 - item removed successfully
-        }
-        return 1; //1 - item wasn't found
-    };
-
-    //remove an object from the table and return a pointer to it
-    Tobj* pop(Tkey key){
-        MJA_LinkedList<HashTableEntry>* index = &(table[hashFunc(key)]);
-        MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(index, key);
-        if (nodePtr != nullptr){
-            HashTableEntry* entry = index->popNode(nodePtr); //pop entry off the linked list, deallocating the linked list node
-            Tobj* output = entry->obj; //get object to return
-            entry->obj = nullptr; //clear entry's ptr so object isn't destroyed
-            delete entry; //deallocate memory for entry
-            return output; //return object pointer
-        } else {
-            return nullptr; //not found return nullptr
-        }
-    };
-
+    int add(Tobj* obj, Tkey key); //adds object to that key, if the key already exists then the old object is overwritten
+    int rem(Tkey key);
+    Tobj* pop(Tkey key);
 };
+
+/*
+more lengthy/looping functions are defined below to prevent above main header getting spammed
+*/
+
+//copy constructor
+template <typename Tobj,typename Tkey>
+MJA_HashTable<Tobj, Tkey> :: MJA_HashTable(MJA_HashTable<Tobj, Tkey> &oldTable) : MJA_HashTable(oldTable.length, oldTable.hashFunction, oldTable.safeDestruction) {
+
+    Tkey* keys = oldTable.getKeys(); //get all keys stored in the old table
+    for (int i=0; i<oldTable.getKeyCount();i++){
+        this->add(new Tobj(*(oldTable.get(keys[i]))), keys[i]); //add them one by one into the new table
+    }
+    delete[] keys;
+};
+
+//access a stored object given the key
+template <typename Tobj,typename Tkey>
+Tobj* MJA_HashTable<Tobj, Tkey> :: get(Tkey key){
+    MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(&(table[hashFunc(key)]), key);
+    if (nodePtr != nullptr){
+        return nodePtr->obj->obj; //NodeLL -> HashTableEntry -> Tobj
+    } else {
+        return nullptr; //not found return nullptr
+    }
+};
+
+//returns all the stored keys
+template <typename Tobj, typename Tkey>
+Tkey* MJA_HashTable<Tobj, Tkey> :: getKeys(){
+    if (keyCount == 0){
+        return nullptr; //no keys stored to return
+    }
+    Tkey* output = new Tkey[keyCount];
+    int kCount = 0;
+    for (int i=0;i<length;i++){
+        MJA_LinkedList<HashTableEntry>* index = &(table[i]); //get table index at i
+        //attempt to scan for entries
+        if (index->resetCycleUp()){
+            do {
+                output[kCount] = index->cycle->obj->key;
+                kCount++;
+            } while (index->cycleUp());
+        }
+        if(kCount >= keyCount) {
+            break; //found all items, no point scanning down the rest of the table
+        }
+    }
+    return output;
+};
+
+//add given a new entry into the table, if an item is already bound to said key then the item is overwritten
+template <typename Tobj,typename Tkey>
+int MJA_HashTable<Tobj, Tkey> :: add(Tobj* obj, Tkey key){
+    int flag = SUCCESS;
+    MJA_LinkedList<HashTableEntry>* index = &(table[hashFunc(key)]);
+    MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(index, key);
+    if (nodePtr != nullptr){ //item is already bound to that key, replace it destructively -- can do so non-destructively by manually poping key first
+        index->remNode(nodePtr);
+        flag = KEY_OVERWRITTEN;
+    } else {
+        keyCount++; //inc stored key count
+    }
+    index->addEnd(new HashTableEntry(obj, key));
+    return flag; //indicate whether the key was occupied or not
+};
+
+//remove and deallocate an object if stored inside of the table
+template <typename Tobj,typename Tkey>
+int MJA_HashTable<Tobj, Tkey> :: rem(Tkey key){
+    MJA_LinkedList<HashTableEntry>* index = &(table[hashFunc(key)]);
+    MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(index, key);
+    if (nodePtr != nullptr){
+        index->remNode(nodePtr);
+        keyCount--; //decrement key count
+        return SUCCESS; //indicate that item was removed successfully
+    }
+    return NON_EXIST_KEY; //indicate that item wasn't found
+};
+
+//remove an object from the table and return a pointer to it
+template <typename Tobj,typename Tkey>
+Tobj* MJA_HashTable<Tobj, Tkey> :: pop(Tkey key){
+    MJA_LinkedList<HashTableEntry>* index = &(table[hashFunc(key)]);
+    MJA_NodeLL<HashTableEntry>* nodePtr = getTableNode(index, key);
+    if (nodePtr != nullptr){
+        HashTableEntry* entry = index->popNode(nodePtr); //pop entry off the linked list, deallocating the linked list node
+        Tobj* output = entry->obj; //get object to return
+        entry->obj = nullptr; //clear entry's ptr so object isn't destroyed
+        delete entry; //deallocate memory for entry
+        keyCount--; //decrement key count
+        return output; //return object pointer
+    } else {
+        return nullptr; //not found return nullptr
+    }
+};
+
 
 #endif

@@ -36,6 +36,7 @@ class MJA_LinkedList {
 public:
 
     MJA_LinkedList(){};
+    MJA_LinkedList(MJA_LinkedList<T> &oldList); //copy constructor
     ~MJA_LinkedList(){clearAll();};
     void clearAll(); //clears the list, destroying all stored objects
     void popAll(); //clears the list, without destroying all stored objects
@@ -112,6 +113,17 @@ private:
 /*
 more lengthy/looping functions are defined below to prevent above main header getting spammed
 */
+
+//copy constructor
+template <typename T>
+MJA_LinkedList<T> :: MJA_LinkedList(MJA_LinkedList<T> &oldList) : MJA_LinkedList<T>(){
+    //use reset cycle to copy over each item in the same position
+    if (oldList.resetCycleUp()){
+        do {
+            this->addEnd(new T(*(oldList.cycle->obj)));
+        } while (oldList.cycleUp());
+    }
+}
 
 //removes all items from the linked list
 template <typename T>
